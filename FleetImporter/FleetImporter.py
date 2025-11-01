@@ -376,6 +376,7 @@ class FleetImporter(Processor):
         uninstall_script = self.env.get("uninstall_script", "")
         pre_install_query = self.env.get("pre_install_query", "")
         post_install_script = self.env.get("post_install_script", "")
+        icon_path_str = self.env.get("icon", "").strip()
 
         # Calculate SHA-256 hash before uploading
         self.output(f"Calculating SHA-256 hash for {pkg_path.name}...")
@@ -388,6 +389,13 @@ class FleetImporter(Processor):
         try:
             temp_dir = self._clone_gitops_repo(gitops_repo_url, github_token)
             self.output(f"Repository cloned to: {temp_dir}")
+
+            # Copy icon to GitOps repo if provided
+            icon_relative_path = None
+            if icon_path_str:
+                icon_relative_path = self._copy_icon_to_gitops_repo(
+                    temp_dir, icon_path_str, software_title
+                )
 
             # Upload package to S3
             self.output(f"Uploading package to S3 bucket: {aws_s3_bucket}")
@@ -424,6 +432,7 @@ class FleetImporter(Processor):
                 uninstall_script,
                 pre_install_query,
                 post_install_script,
+                icon_relative_path,
             )
 
             # Update team YAML file to reference the package
@@ -449,6 +458,7 @@ class FleetImporter(Processor):
                 version,
                 package_yaml_path,
                 team_yaml_path,
+                icon_relative_path,
             )
             self.env["git_branch"] = branch_name
 
@@ -877,6 +887,69 @@ class FleetImporter(Processor):
             # Log error but don't fail the entire workflow
             self.output(f"Warning: S3 cleanup failed: {e}")
 
+    def _copy_icon_to_gitops_repo(
+        self, repo_dir: str, icon_path_str: str, software_title: str
+    ) -> str:
+        """Copy icon file to GitOps repository under lib/icons.
+
+        Args:
+            repo_dir: Path to Git repository
+            icon_path_str: Path to icon file (relative to recipe or absolute)
+            software_title: Software title for naming
+
+        Returns:
+            Relative path from software YAML to icon (e.g., ../icons/claude.png)
+
+        Raises:
+            ProcessorError: If icon file not found or invalid
+        """
+        # Resolve icon path relative to recipe directory first
+        icon_path = Path(icon_path_str)
+        if not icon_path.is_absolute():
+            # Get recipe directory from AutoPkg environment
+            recipe_dir = self.env.get("RECIPE_DIR")
+            if recipe_dir:
+                icon_path = (Path(recipe_dir) / icon_path_str).resolve()
+            else:
+                icon_path = icon_path.expanduser().resolve()
+        else:
+            icon_path = icon_path.expanduser().resolve()
+
+        if not icon_path.exists():
+            raise ProcessorError(f"Icon file not found: {icon_path}")
+
+        # Validate icon is PNG
+        if icon_path.suffix.lower() != ".png":
+            self.output(
+                f"Warning: Icon file {icon_path.name} is not a PNG file. Fleet requires PNG format."
+            )
+
+        # Check file size (must be <= 100KB)
+        icon_size_bytes = icon_path.stat().st_size
+        icon_size_kb = icon_size_bytes / 1024
+        if icon_size_bytes > 100 * 1024:  # 100KB in bytes
+            raise ProcessorError(
+                f"Icon file {icon_path.name} is too large ({icon_size_kb:.1f} KB). "
+                f"Maximum allowed size is 100 KB. Please use a smaller icon file."
+            )
+
+        # Create icons directory in GitOps repo
+        icons_dir = Path(repo_dir) / "lib" / "icons"
+        icons_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use slugified software title for icon filename
+        slug = self._slugify(software_title)
+        icon_filename = f"{slug}.png"
+        dest_icon_path = icons_dir / icon_filename
+
+        # Copy icon to GitOps repo
+        self.output(f"Copying icon to GitOps repo: lib/icons/{icon_filename}")
+        shutil.copy2(icon_path, dest_icon_path)
+
+        # Return relative path from lib/macos/software to lib/icons
+        # From lib/macos/software/package.yml to lib/icons/icon.png = ../../icons/icon.png
+        return f"../../icons/{icon_filename}"
+
     def _clone_gitops_repo(self, repo_url: str, github_token: str) -> str:
         """Clone GitOps repository to a temporary directory.
 
@@ -973,6 +1046,7 @@ class FleetImporter(Processor):
         uninstall_script: str,
         pre_install_query: str,
         post_install_script: str,
+        icon_path: str = None,
     ) -> str:
         """Create software package YAML file in lib/ directory.
 
@@ -986,6 +1060,7 @@ class FleetImporter(Processor):
             uninstall_script: Custom uninstall script
             pre_install_query: Pre-install query
             post_install_script: Post-install script
+            icon_path: Relative path to icon file in GitOps repo (e.g., ../icons/claude.png)
 
         Returns:
             Relative path to created package YAML file (for use in team YAML)
@@ -1003,6 +1078,10 @@ class FleetImporter(Processor):
             "url": cloudfront_url,
             "hash_sha256": hash_sha256,
         }
+
+        # Add optional icon path if provided
+        if icon_path:
+            package_entry["icon_path"] = {"path": icon_path}
 
         # Add optional script paths if provided
         if install_script:
@@ -1097,6 +1176,7 @@ class FleetImporter(Processor):
         version: str,
         package_yaml_path: str,
         team_yaml_path: str,
+        icon_path: str = None,
     ):
         """Create Git branch, commit changes, and push to remote.
 
@@ -1107,6 +1187,7 @@ class FleetImporter(Processor):
             version: Software version for commit message
             package_yaml_path: Relative path to package YAML file
             team_yaml_path: Relative path to team YAML file
+            icon_path: Optional relative path to icon file (e.g., ../../icons/claude.png)
 
         Raises:
             ProcessorError: If Git operations fail
@@ -1124,15 +1205,23 @@ class FleetImporter(Processor):
                 env=git_env,
             )
 
-            # Stage both YAML files
+            # Stage YAML files and icon
             # Convert relative paths (with ../) to paths relative to repo root
             # package_yaml_path is like ../lib/macos/software/chrome.yml
             # team_yaml_path is like Path object to teams/team-name.yml
             pkg_file = package_yaml_path.replace("../", "")
             team_file = str(team_yaml_path.relative_to(repo_dir))
 
+            files_to_add = [pkg_file, team_file]
+
+            # Add icon file if provided
+            if icon_path:
+                # icon_path is like ../../icons/claude.png, need to convert to lib/icons/claude.png
+                icon_file = icon_path.replace("../../", "lib/")
+                files_to_add.append(icon_file)
+
             subprocess.run(
-                ["git", "add", pkg_file, team_file],
+                ["git", "add"] + files_to_add,
                 cwd=repo_dir,
                 check=True,
                 capture_output=True,
