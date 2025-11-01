@@ -384,6 +384,7 @@ The `s3_retention_versions` parameter controls how many old versions are kept:
 | \`platform\` | \`darwin\` | Platform: darwin, windows, linux, ios, or ipados |
 | \`self_service\` | \`true\` | Whether package is available for self-service installation |
 | \`automatic_install\` | \`false\` | Auto-install on hosts without this software |
+| \`categories\` | \`[]\` | List of category names to group software in Fleet Desktop (e.g., ['Productivity', 'Browser']) |
 | \`labels_include_any\` | \`[]\` | List of label names - software available on hosts with ANY of these |
 | \`labels_exclude_any\` | \`[]\` | List of label names - software excluded from hosts with ANY of these |
 | \`install_script\` | \`""\` | Custom install script body |
@@ -427,6 +428,24 @@ Process:
     labels_include_any:
       - workstations
       - developers
+  Processor: FleetImporter
+```
+
+### With Categories for Grouping
+
+```yaml
+Process:
+- Arguments:
+    pkg_path: '%pkg_path%'
+    software_title: 'Google Chrome'
+    version: '%version%'
+    fleet_api_base: '%FLEET_API_BASE%'
+    fleet_api_token: '%FLEET_API_TOKEN%'
+    team_id: '%FLEET_TEAM_ID%'
+    self_service: true
+    categories:
+      - Browser
+      - Productivity
   Processor: FleetImporter
 ```
 
