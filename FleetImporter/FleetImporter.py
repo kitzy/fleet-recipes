@@ -572,8 +572,43 @@ class FleetImporter(Processor):
         request_headers["Authorization"] = authorization_header
         return request_headers
 
+    def _get_autopkg_pref(self, key: str, default=None):
+        """Get a preference value from AutoPkg preferences or environment variables.
+
+        Checks in order:
+        1. Environment variable
+        2. AutoPkg preferences (com.github.autopkg)
+        3. Default value
+
+        Args:
+            key: Preference key name
+            default: Default value if not found
+
+        Returns:
+            Preference value or default
+        """
+        # First check environment variable
+        env_value = os.environ.get(key)
+        if env_value:
+            return env_value
+
+        # Then check AutoPkg preferences
+        try:
+            from Foundation import CFPreferencesCopyAppValue
+
+            pref_value = CFPreferencesCopyAppValue(key, "com.github.autopkg")
+            if pref_value:
+                return pref_value
+        except ImportError:
+            # Foundation not available (non-macOS), skip plist check
+            pass
+
+        return default
+
     def _get_aws_credentials(self) -> tuple[str, str, str]:
-        """Get AWS credentials from environment variables.
+        """Get AWS credentials from AutoPkg preferences or environment variables.
+
+        Checks both AutoPkg preferences and environment variables.
 
         Returns:
             Tuple of (access_key_id, secret_access_key, region)
@@ -581,14 +616,16 @@ class FleetImporter(Processor):
         Raises:
             ProcessorError: If required credentials are missing
         """
-        access_key = os.environ.get("AWS_ACCESS_KEY_ID")
-        secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-        region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+        access_key = self._get_autopkg_pref("AWS_ACCESS_KEY_ID")
+        secret_key = self._get_autopkg_pref("AWS_SECRET_ACCESS_KEY")
+        region = self._get_autopkg_pref("AWS_DEFAULT_REGION", "us-east-1")
 
         if not access_key or not secret_key:
             raise ProcessorError(
                 "AWS credentials not found. Set AWS_ACCESS_KEY_ID and "
-                "AWS_SECRET_ACCESS_KEY environment variables."
+                "AWS_SECRET_ACCESS_KEY in AutoPkg preferences or environment variables.\n"
+                "Use: defaults write com.github.autopkg AWS_ACCESS_KEY_ID 'your-key'\n"
+                "     defaults write com.github.autopkg AWS_SECRET_ACCESS_KEY 'your-secret'"
             )
 
         return access_key, secret_key, region
