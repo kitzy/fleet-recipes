@@ -528,8 +528,23 @@ class FleetImporter(Processor):
         # Parse URL
         parsed = urllib.parse.urlparse(url)
         host = parsed.netloc
-        path = parsed.path or "/"
-        query = parsed.query
+        # Canonical path: each segment should be URI-encoded, but not the slashes
+        # urllib.parse.quote with safe='/' does this correctly
+        path = urllib.parse.quote(parsed.path or "/", safe="/")
+
+        # Canonical query string: sort parameters and encode both keys and values
+        if parsed.query:
+            # Parse query parameters
+            params = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+            # Sort by parameter name, then by value
+            params.sort()
+            # Encode each parameter (key=value format)
+            canonical_query = "&".join(
+                f"{urllib.parse.quote(k, safe='')}={urllib.parse.quote(str(v), safe='')}"
+                for k, v in params
+            )
+        else:
+            canonical_query = ""
 
         # Create canonical request
         t = datetime.utcnow()
@@ -554,7 +569,7 @@ class FleetImporter(Processor):
 
         # Create canonical request
         payload_hash = hashlib.sha256(payload).hexdigest()
-        canonical_request = f"{method}\n{path}\n{query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+        canonical_request = f"{method}\n{path}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
 
         # Create string to sign
         algorithm = "AWS4-HMAC-SHA256"
@@ -668,8 +683,8 @@ class FleetImporter(Processor):
             extension = pkg_path.suffix
             s3_key = f"software/{software_title}/{software_title}-{version}{extension}"
 
-            # Construct S3 URL
-            url = f"https://{bucket}.s3.{region}.amazonaws.com/{urllib.parse.quote(s3_key)}"
+            # Construct S3 URL (do not pre-encode - signing function will handle encoding)
+            url = f"https://{bucket}.s3.{region}.amazonaws.com/{s3_key}"
 
             # Check if package already exists in S3 using HEAD request
             head_headers = self._aws_sign_v4(
@@ -780,7 +795,8 @@ class FleetImporter(Processor):
             prefix = f"software/{software_title}/"
 
             # List all objects for this software title
-            list_url = f"https://{bucket}.s3.{region}.amazonaws.com/?list-type=2&prefix={urllib.parse.quote(prefix)}"
+            # Note: query parameters will be canonicalized by the signing function
+            list_url = f"https://{bucket}.s3.{region}.amazonaws.com/?list-type=2&prefix={prefix}"
             list_headers = self._aws_sign_v4(
                 "GET", list_url, region, "s3", access_key, secret_key
             )
@@ -863,7 +879,7 @@ class FleetImporter(Processor):
             for ver in versions_to_delete:
                 for key in versions[ver]:
                     self.output(f"Deleting old version from S3: {key}")
-                    delete_url = f"https://{bucket}.s3.{region}.amazonaws.com/{urllib.parse.quote(key)}"
+                    delete_url = f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
                     delete_headers = self._aws_sign_v4(
                         "DELETE", delete_url, region, "s3", access_key, secret_key
                     )
