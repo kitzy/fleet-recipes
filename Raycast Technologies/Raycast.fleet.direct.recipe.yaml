@@ -1,5 +1,5 @@
 Description: "Builds Raycast.pkg using the upstream recipe, then uploads to Fleet."
-Identifier: com.github.kitzy.fleet.Raycast
+Identifier: com.github.fleet.direct.Raycast
 Input:
   NAME: Raycast
 MinimumVersion: "2.0"
@@ -16,4 +16,4 @@ Process:
     categories:
     - Productivity
     icon: Raycast.png
-  Processor: com.github.kitzy.FleetImporter/FleetImporter
+  Processor: com.github.fleet.FleetImporter/FleetImporter

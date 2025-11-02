@@ -1,5 +1,5 @@
 Description: "Builds Claude.pkg using the upstream recipe, then uploads to Fleet."
-Identifier: com.github.kitzy.fleet.Claude
+Identifier: com.github.fleet.direct.Claude
 Input:
   NAME: Claude
 MinimumVersion: "2.0"
@@ -16,4 +16,4 @@ Process:
     categories:
     - Developer tools
     icon: Claude.png
-  Processor: com.github.kitzy.FleetImporter/FleetImporter
+  Processor: com.github.fleet.FleetImporter/FleetImporter
