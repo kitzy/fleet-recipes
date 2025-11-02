@@ -1,5 +1,5 @@
 Description: "Builds Signal.pkg using the upstream recipe, then uploads to Fleet."
-Identifier: com.github.kitzy.fleet.Signal
+Identifier: com.github.fleet.direct.Signal
 Input:
   NAME: Signal
 MinimumVersion: "2.0"
@@ -16,4 +16,4 @@ Process:
     categories:
     - Communication
     icon: Signal.png
-  Processor: com.github.kitzy.FleetImporter/FleetImporter
+  Processor: com.github.fleet.FleetImporter/FleetImporter
