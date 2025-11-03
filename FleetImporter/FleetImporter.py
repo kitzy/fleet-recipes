@@ -143,8 +143,8 @@ class FleetImporter(Processor):
         },
         "s3_retention_versions": {
             "required": False,
-            "default": 3,
-            "description": "Number of old versions to retain per software title in S3 (default: 3).",
+            "default": 0,
+            "description": "Number of old versions to retain per software title in S3. Set to 0 to disable pruning (default: 0).",
         },
         # --- AWS Configuration (required for GitOps mode) ---
         "aws_access_key_id": {
@@ -398,7 +398,7 @@ class FleetImporter(Processor):
         gitops_software_dir = self.env.get("gitops_software_dir", "lib/macos/software")
         gitops_team_yaml_path = self.env.get("gitops_team_yaml_path")
         github_token = self.env.get("github_token")
-        s3_retention_versions = int(self.env.get("s3_retention_versions", 3))
+        s3_retention_versions = int(self.env.get("s3_retention_versions", 0))
 
         # Validate required GitOps parameters
         if not all(
@@ -473,12 +473,15 @@ class FleetImporter(Processor):
             self.env["hash_sha256"] = hash_sha256
 
             # Clean up old versions in S3
-            self.output(
-                f"Cleaning up old S3 versions (retaining {s3_retention_versions} most recent)..."
-            )
-            self._cleanup_old_s3_versions(
-                aws_s3_bucket, software_title, version, s3_retention_versions
-            )
+            if s3_retention_versions > 0:
+                self.output(
+                    f"Cleaning up old S3 versions (retaining {s3_retention_versions} most recent)..."
+                )
+                self._cleanup_old_s3_versions(
+                    aws_s3_bucket, software_title, version, s3_retention_versions
+                )
+            else:
+                self.output("S3 pruning disabled (s3_retention_versions = 0)")
 
             # Create software package YAML file
             self.output(f"Creating software package YAML in {gitops_software_dir}")
@@ -716,12 +719,18 @@ class FleetImporter(Processor):
             bucket: S3 bucket name
             software_title: Software title
             current_version: Current version (just uploaded)
-            retention_count: Number of versions to keep
+            retention_count: Number of versions to keep (0 means no pruning)
 
         Safety rules:
         - Never delete the only remaining version
         - Keep the N most recent versions based on version sort
+        - If retention_count is 0, skip pruning entirely
         """
+        # Skip pruning if retention_count is 0
+        if retention_count <= 0:
+            self.output("S3 version pruning disabled (retention_count <= 0)")
+            return
+
         try:
             # Get S3 client
             s3_client = self._get_s3_client()

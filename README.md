@@ -169,7 +169,7 @@ All [optional arguments](#optional-recipe-arguments) from direct mode, plus:
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `s3_retention_versions` | integer | `3` | Number of old package versions to retain in S3 |
+| `s3_retention_versions` | integer | `0` | Number of old package versions to retain in S3 (0 = no pruning) |
 | `aws_access_key_id` | string | - | AWS access key ID for S3 operations |
 | `aws_secret_access_key` | string | - | AWS secret access key for S3 operations |
 | `aws_default_region` | string | `us-east-1` | AWS region for S3 operations |
@@ -202,7 +202,7 @@ Process:
     gitops_software_dir: "%FLEET_GITOPS_SOFTWARE_DIR%"
     gitops_team_yaml_path: "%FLEET_GITOPS_TEAM_YAML_PATH%"
     github_token: "%FLEET_GITOPS_GITHUB_TOKEN%"
-    s3_retention_versions: 3
+    s3_retention_versions: 0
     self_service: true
     categories:
     - Developer tools
