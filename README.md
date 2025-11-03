@@ -2,20 +2,36 @@
 
 AutoPkg processor for uploading macOS installer packages to Fleet.
 
+## Getting started
+
+Download AutoPkg from [AutoPkg releases](https://github.com/autopkg/autopkg/releases/latest) and install.
+
+Run `autopkg repo-add fleet-recipes` to add this repo.
+
 ## Overview
 
 FleetImporter extends AutoPkg to integrate with Fleet's software management. It supports two deployment modes:
 
-- **Direct Mode**: Upload packages directly to Fleet via API
-- **GitOps Mode**: Upload to S3 and create pull requests for Git-based configuration management
+- **Direct mode**: Upload packages directly to Fleet via API
+- **GitOps mode**: Upload to S3 and create pull requests for Git-based configuration management
+
+## Requirements
+
+- **Python 3.9+**: Required by FleetImporter processor
+- **AutoPkg 2.3+**: Required for recipe execution
+- **boto3>=1.18.0**: Required for GitOps mode S3 operations
+  - Automatically installed when needed if not present
+  - Uses only native Python libraries for direct mode
 
 ---
 
-## Direct Mode
+## Direct mode
 
 Upload packages directly to your Fleet server.
 
-### Required Environment Variables
+### Required configuration
+
+Set via AutoPkg preferences (recommended):
 
 ```bash
 defaults write com.github.autopkg FLEET_API_BASE "https://fleet.example.com"
@@ -23,7 +39,15 @@ defaults write com.github.autopkg FLEET_API_TOKEN "your-fleet-api-token"
 defaults write com.github.autopkg FLEET_TEAM_ID "1"
 ```
 
-### Required Recipe Arguments
+Or via environment variables:
+
+```bash
+export FLEET_API_BASE="https://fleet.example.com"
+export FLEET_API_TOKEN="your-fleet-api-token"
+export FLEET_TEAM_ID="1"
+```
+
+### Required recipe arguments
 
 ```yaml
 Process:
@@ -37,7 +61,7 @@ Process:
   Processor: com.github.kitzy.FleetImporter/FleetImporter
 ```
 
-### Optional Recipe Arguments
+### Optional recipe arguments
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -52,14 +76,14 @@ Process:
 | `pre_install_query` | string | - | osquery to run before install |
 | `post_install_script` | string | - | Script to run after install |
 
-### Example Recipe
+### Example recipe
 
 ```yaml
 Description: "Builds Claude.pkg and uploads to Fleet."
-Identifier: com.github.kitzy.fleet.Claude
+Identifier: com.github.fleet.Claude
 Input:
   NAME: Claude
-MinimumVersion: "2.0"
+MinimumVersion: "2.3"
 ParentRecipe: com.github.kitzy.pkg.Claude
 Process:
 - Arguments:
@@ -73,33 +97,52 @@ Process:
     categories:
     - Developer tools
     icon: Claude.png
-  Processor: com.github.kitzy.FleetImporter/FleetImporter
+  Processor: com.github.FleetImporter/FleetImporter
 ```
 
 ---
 
-## GitOps Mode
+## GitOps mode
 
 Upload packages to S3 and create GitOps pull requests for Fleet configuration management.
 
 > **Note:** GitOps mode requires you to provide your own S3 bucket and CloudFront distribution. When Fleet operates in GitOps mode, it deletes any packages not defined in the YAML files during sync ([fleetdm/fleet#34137](https://github.com/fleetdm/fleet/issues/34137)). By hosting packages externally and using pull requests, you can stage updates and merge them at your own pace.
 
-### Required Infrastructure
+> **Dependency:** GitOps mode requires `boto3>=1.18.0` for S3 operations. If not already installed, the processor will automatically install it using pip when GitOps mode is first used.
+
+### Required infrastructure
 
 - AWS S3 bucket for package storage
 - CloudFront distribution pointing to the S3 bucket
 - AWS credentials configured (via `~/.aws/credentials` or environment variables)
 
-### Required Environment Variables
+### Required configuration
+
+Set via AutoPkg preferences (recommended):
+
+```bash
+defaults write com.github.autopkg AWS_S3_BUCKET "my-fleet-packages"
+defaults write com.github.autopkg AWS_CLOUDFRONT_DOMAIN "cdn.example.com"
+defaults write com.github.autopkg AWS_ACCESS_KEY_ID "your-access-key"
+defaults write com.github.autopkg AWS_SECRET_ACCESS_KEY "your-secret-key"
+defaults write com.github.autopkg AWS_DEFAULT_REGION "us-east-1"
+defaults write com.github.autopkg FLEET_GITOPS_REPO_URL "https://github.com/org/fleet-gitops.git"
+defaults write com.github.autopkg FLEET_GITOPS_GITHUB_TOKEN "your-github-token"
+```
+
+Or via environment variables:
 
 ```bash
 export AWS_S3_BUCKET="my-fleet-packages"
 export AWS_CLOUDFRONT_DOMAIN="cdn.example.com"
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_DEFAULT_REGION="us-east-1"
 export FLEET_GITOPS_REPO_URL="https://github.com/org/fleet-gitops.git"
 export FLEET_GITOPS_GITHUB_TOKEN="your-github-token"
 ```
 
-### Required Recipe Arguments
+### Required recipe arguments
 
 ```yaml
 Process:
@@ -110,6 +153,9 @@ Process:
     gitops_mode: true
     aws_s3_bucket: "%AWS_S3_BUCKET%"
     aws_cloudfront_domain: "%AWS_CLOUDFRONT_DOMAIN%"
+    aws_access_key_id: "%AWS_ACCESS_KEY_ID%"
+    aws_secret_access_key: "%AWS_SECRET_ACCESS_KEY%"
+    aws_default_region: "%AWS_DEFAULT_REGION%"
     gitops_repo_url: "%FLEET_GITOPS_REPO_URL%"
     gitops_software_dir: "%FLEET_GITOPS_SOFTWARE_DIR%"
     gitops_team_yaml_path: "%FLEET_GITOPS_TEAM_YAML_PATH%"
@@ -117,26 +163,29 @@ Process:
   Processor: com.github.kitzy.FleetImporter/FleetImporter
 ```
 
-### Optional Recipe Arguments
+### Optional recipe arguments
 
-All [optional arguments](#optional-recipe-arguments) from Direct Mode, plus:
+All [optional arguments](#optional-recipe-arguments) from direct mode, plus:
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `s3_retention_versions` | integer | `3` | Number of old package versions to retain in S3 |
+| `s3_retention_versions` | integer | `0` | Number of old package versions to retain in S3 (0 = no pruning) |
+| `aws_access_key_id` | string | - | AWS access key ID for S3 operations |
+| `aws_secret_access_key` | string | - | AWS secret access key for S3 operations |
+| `aws_default_region` | string | `us-east-1` | AWS region for S3 operations |
 | `gitops_software_dir` | string | `lib/macos/software` | Directory for software YAML files |
 | `gitops_team_yaml_path` | string | - | Path to team YAML file (e.g., `teams/workstations.yml`) |
 
-### Example Recipe
+### Example recipe
 
 ```yaml
 Description: "Builds Claude.pkg, uploads to S3, and creates GitOps PR."
-Identifier: com.github.kitzy.fleet.gitops.Claude
+Identifier: com.github.fleet.gitops.Claude
 Input:
   NAME: Claude
   FLEET_GITOPS_SOFTWARE_DIR: lib/macos/software
   FLEET_GITOPS_TEAM_YAML_PATH: teams/workstations.yml
-MinimumVersion: "2.0"
+MinimumVersion: "2.3"
 ParentRecipe: com.github.kitzy.pkg.Claude
 Process:
 - Arguments:
@@ -146,19 +195,22 @@ Process:
     gitops_mode: true
     aws_s3_bucket: "%AWS_S3_BUCKET%"
     aws_cloudfront_domain: "%AWS_CLOUDFRONT_DOMAIN%"
+    aws_access_key_id: "%AWS_ACCESS_KEY_ID%"
+    aws_secret_access_key: "%AWS_SECRET_ACCESS_KEY%"
+    aws_default_region: "%AWS_DEFAULT_REGION%"
     gitops_repo_url: "%FLEET_GITOPS_REPO_URL%"
     gitops_software_dir: "%FLEET_GITOPS_SOFTWARE_DIR%"
     gitops_team_yaml_path: "%FLEET_GITOPS_TEAM_YAML_PATH%"
     github_token: "%FLEET_GITOPS_GITHUB_TOKEN%"
-    s3_retention_versions: 3
+    s3_retention_versions: 0
     self_service: true
     categories:
     - Developer tools
     icon: Claude.png
-  Processor: com.github.kitzy.FleetImporter/FleetImporter
+  Processor: com.github.FleetImporter/FleetImporter
 ```
 
-### GitOps Workflow
+### GitOps workflow
 
 1. Package is uploaded to S3
 2. CloudFront URL is generated
@@ -175,7 +227,52 @@ Process:
 
 ---
 
-## Getting Help
+## Troubleshooting
+
+### Common issues
+
+**AutoPkg not found**
+- Ensure AutoPkg is installed: `autopkg version`
+- Download from [AutoPkg releases](https://github.com/autopkg/autopkg/releases/latest) if needed
+
+**Recipe execution fails**
+- Verify environment variables are set correctly
+- Check AutoPkg recipe dependencies: `autopkg list-repos`
+- Run with verbose output: `autopkg run -v YourRecipe.recipe.yaml`
+
+**Fleet API authentication errors**
+- Verify `FLEET_API_BASE` URL is correct and accessible
+- Check that `FLEET_API_TOKEN` has software management permissions
+- Ensure `FLEET_TEAM_ID` exists and is accessible with your token
+
+**GitOps mode issues**
+- Verify AWS credentials are configured
+- Check S3 bucket permissions for upload/delete operations
+- Ensure GitHub token has repository write permissions
+- Verify GitOps repository URL and paths are correct
+
+**Package upload failures**
+- Check package file exists and is readable
+- Verify package is a valid macOS installer (.pkg)
+- Ensure sufficient disk space and network connectivity
+
+### Debug commands
+
+```bash
+# Check AutoPkg installation
+autopkg version
+
+# List installed repos
+autopkg list-repos
+
+# Validate recipe syntax
+autopkg verify YourRecipe.recipe.yaml
+
+# Run with maximum verbosity
+autopkg run -vvv YourRecipe.recipe.yaml
+```
+
+## Getting help
 
 - Ask questions in the [#autopkg channel](https://macadmins.slack.com/archives/C056155B4) on MacAdmins Slack
 - Open an [issue](https://github.com/kitzy/fleetimporter/issues) for bugs or feature requests

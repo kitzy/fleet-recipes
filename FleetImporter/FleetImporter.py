@@ -39,7 +39,7 @@ except ImportError:
     print("boto3 not found, installing...")
     try:
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--quiet", "boto3"],
+            [sys.executable, "-m", "pip", "install", "--quiet", "boto3>=1.18.0"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -70,6 +70,11 @@ class FleetImporter(Processor):
     This processor uploads software packages (.pkg files) to Fleet and configures
     deployment settings including self-service availability, automatic installation,
     host targeting via labels, and custom install/uninstall scripts.
+
+    Dependencies:
+        - boto3>=1.18.0: Required for GitOps mode S3 operations. Will be automatically
+          installed if not present when GitOps mode is used.
+        - Native Python libraries only for direct mode (no external dependencies)
     """
 
     description = __doc__
@@ -138,8 +143,22 @@ class FleetImporter(Processor):
         },
         "s3_retention_versions": {
             "required": False,
-            "default": 3,
-            "description": "Number of old versions to retain per software title in S3 (default: 3).",
+            "default": 0,
+            "description": "Number of old versions to retain per software title in S3. Set to 0 to disable pruning (default: 0).",
+        },
+        # --- AWS Configuration (required for GitOps mode) ---
+        "aws_access_key_id": {
+            "required": False,
+            "description": "AWS access key ID for S3 operations (required for GitOps mode).",
+        },
+        "aws_secret_access_key": {
+            "required": False,
+            "description": "AWS secret access key for S3 operations (required for GitOps mode).",
+        },
+        "aws_default_region": {
+            "required": False,
+            "default": "us-east-1",
+            "description": "AWS region for S3 operations (default: us-east-1).",
         },
         # --- Fleet deployment options ---
         "self_service": {
@@ -379,7 +398,7 @@ class FleetImporter(Processor):
         gitops_software_dir = self.env.get("gitops_software_dir", "lib/macos/software")
         gitops_team_yaml_path = self.env.get("gitops_team_yaml_path")
         github_token = self.env.get("github_token")
-        s3_retention_versions = int(self.env.get("s3_retention_versions", 3))
+        s3_retention_versions = int(self.env.get("s3_retention_versions", 0))
 
         # Validate required GitOps parameters
         if not all(
@@ -454,12 +473,15 @@ class FleetImporter(Processor):
             self.env["hash_sha256"] = hash_sha256
 
             # Clean up old versions in S3
-            self.output(
-                f"Cleaning up old S3 versions (retaining {s3_retention_versions} most recent)..."
-            )
-            self._cleanup_old_s3_versions(
-                aws_s3_bucket, software_title, version, s3_retention_versions
-            )
+            if s3_retention_versions > 0:
+                self.output(
+                    f"Cleaning up old S3 versions (retaining {s3_retention_versions} most recent)..."
+                )
+                self._cleanup_old_s3_versions(
+                    aws_s3_bucket, software_title, version, s3_retention_versions
+                )
+            else:
+                self.output("S3 pruning disabled (s3_retention_versions = 0)")
 
             # Create software package YAML file
             self.output(f"Creating software package YAML in {gitops_software_dir}")
@@ -541,43 +563,11 @@ class FleetImporter(Processor):
         # Remove leading/trailing hyphens
         return slug.strip("-")
 
-    def _get_autopkg_pref(self, key: str, default=None):
-        """Get a preference value from AutoPkg preferences or environment variables.
-
-        Checks in order:
-        1. Environment variable
-        2. AutoPkg preferences (com.github.autopkg)
-        3. Default value
-
-        Args:
-            key: Preference key name
-            default: Default value if not found
-
-        Returns:
-            Preference value or default
-        """
-        # First check environment variable
-        env_value = os.environ.get(key)
-        if env_value:
-            return env_value
-
-        # Then check AutoPkg preferences
-        try:
-            from Foundation import CFPreferencesCopyAppValue
-
-            pref_value = CFPreferencesCopyAppValue(key, "com.github.autopkg")
-            if pref_value:
-                return pref_value
-        except ImportError:
-            # Foundation not available (non-macOS), skip plist check
-            pass
-
-        return default
-
     def _get_aws_credentials(self) -> tuple[str, str, str]:
-        """Get AWS credentials from AutoPkg preferences or environment variables.
+        """Get AWS credentials from processor environment.
 
-        Checks both AutoPkg preferences and environment variables.
+        Uses standard AutoPkg variable precedence: recipe arguments override
+        AutoPkg preferences, which override defaults.
 
         Returns:
             Tuple of (access_key_id, secret_access_key, region)
@@ -585,16 +575,16 @@ class FleetImporter(Processor):
         Raises:
             ProcessorError: If required credentials are missing
         """
-        access_key = self._get_autopkg_pref("AWS_ACCESS_KEY_ID")
-        secret_key = self._get_autopkg_pref("AWS_SECRET_ACCESS_KEY")
-        region = self._get_autopkg_pref("AWS_DEFAULT_REGION", "us-east-1")
+        access_key = self.env.get("aws_access_key_id")
+        secret_key = self.env.get("aws_secret_access_key")
+        region = self.env.get("aws_default_region", "us-east-1")
 
         if not access_key or not secret_key:
             raise ProcessorError(
-                "AWS credentials not found. Set AWS_ACCESS_KEY_ID and "
-                "AWS_SECRET_ACCESS_KEY in AutoPkg preferences or environment variables.\n"
-                "Use: defaults write com.github.autopkg AWS_ACCESS_KEY_ID 'your-key'\n"
-                "     defaults write com.github.autopkg AWS_SECRET_ACCESS_KEY 'your-secret'"
+                "AWS credentials not found. Please provide aws_access_key_id and "
+                "aws_secret_access_key as recipe arguments or set in AutoPkg preferences:\n"
+                "  defaults write com.github.autopkg AWS_ACCESS_KEY_ID 'your-key'\n"
+                "  defaults write com.github.autopkg AWS_SECRET_ACCESS_KEY 'your-secret'"
             )
 
         return access_key, secret_key, region
@@ -729,12 +719,18 @@ class FleetImporter(Processor):
             bucket: S3 bucket name
             software_title: Software title
             current_version: Current version (just uploaded)
-            retention_count: Number of versions to keep
+            retention_count: Number of versions to keep (0 means no pruning)
 
         Safety rules:
         - Never delete the only remaining version
         - Keep the N most recent versions based on version sort
+        - If retention_count is 0, skip pruning entirely
         """
+        # Skip pruning if retention_count is 0
+        if retention_count <= 0:
+            self.output("S3 version pruning disabled (retention_count <= 0)")
+            return
+
         try:
             # Get S3 client
             s3_client = self._get_s3_client()
