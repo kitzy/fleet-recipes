@@ -1,10 +1,8 @@
-# FleetImporter for AutoPkg
+# fleet-recipes
 
-AutoPkg processor for uploading macOS installer packages to Fleet.
+A community repo of AutoPkg recipes for uploading macOS installer packages to Fleet.
 
 ## Getting started
-
-Download AutoPkg from [AutoPkg releases](https://github.com/autopkg/autopkg/releases/latest) and install.
 
 Run `autopkg repo-add fleet-recipes` to add this repo.
 
@@ -39,14 +37,6 @@ defaults write com.github.autopkg FLEET_API_TOKEN "your-fleet-api-token"
 defaults write com.github.autopkg FLEET_TEAM_ID "1"
 ```
 
-Or via environment variables:
-
-```bash
-export FLEET_API_BASE="https://fleet.example.com"
-export FLEET_API_TOKEN="your-fleet-api-token"
-export FLEET_TEAM_ID="1"
-```
-
 ### Required recipe arguments
 
 ```yaml
@@ -76,30 +66,6 @@ Process:
 | `pre_install_query` | string | - | osquery to run before install |
 | `post_install_script` | string | - | Script to run after install |
 
-### Example recipe
-
-```yaml
-Description: "Builds Claude.pkg and uploads to Fleet."
-Identifier: com.github.fleet.Claude
-Input:
-  NAME: Claude
-MinimumVersion: "2.3"
-ParentRecipe: com.github.kitzy.pkg.Claude
-Process:
-- Arguments:
-    pkg_path: "%pkg_path%"
-    software_title: "%NAME%"
-    version: "%version%"
-    fleet_api_base: "%FLEET_API_BASE%"
-    fleet_api_token: "%FLEET_API_TOKEN%"
-    team_id: "%FLEET_TEAM_ID%"
-    self_service: true
-    categories:
-    - Developer tools
-    icon: Claude.png
-  Processor: com.github.FleetImporter/FleetImporter
-```
-
 ---
 
 ## GitOps mode
@@ -128,18 +94,6 @@ defaults write com.github.autopkg AWS_SECRET_ACCESS_KEY "your-secret-key"
 defaults write com.github.autopkg AWS_DEFAULT_REGION "us-east-1"
 defaults write com.github.autopkg FLEET_GITOPS_REPO_URL "https://github.com/org/fleet-gitops.git"
 defaults write com.github.autopkg FLEET_GITOPS_GITHUB_TOKEN "your-github-token"
-```
-
-Or via environment variables:
-
-```bash
-export AWS_S3_BUCKET="my-fleet-packages"
-export AWS_CLOUDFRONT_DOMAIN="cdn.example.com"
-export AWS_ACCESS_KEY_ID="your-access-key"
-export AWS_SECRET_ACCESS_KEY="your-secret-key"
-export AWS_DEFAULT_REGION="us-east-1"
-export FLEET_GITOPS_REPO_URL="https://github.com/org/fleet-gitops.git"
-export FLEET_GITOPS_GITHUB_TOKEN="your-github-token"
 ```
 
 ### Required recipe arguments
@@ -174,41 +128,7 @@ All [optional arguments](#optional-recipe-arguments) from direct mode, plus:
 | `aws_secret_access_key` | string | - | AWS secret access key for S3 operations |
 | `aws_default_region` | string | `us-east-1` | AWS region for S3 operations |
 | `gitops_software_dir` | string | `lib/macos/software` | Directory for software YAML files |
-| `gitops_team_yaml_path` | string | - | Path to team YAML file (e.g., `teams/workstations.yml`) |
-
-### Example recipe
-
-```yaml
-Description: "Builds Claude.pkg, uploads to S3, and creates GitOps PR."
-Identifier: com.github.fleet.gitops.Claude
-Input:
-  NAME: Claude
-  FLEET_GITOPS_SOFTWARE_DIR: lib/macos/software
-  FLEET_GITOPS_TEAM_YAML_PATH: teams/workstations.yml
-MinimumVersion: "2.3"
-ParentRecipe: com.github.kitzy.pkg.Claude
-Process:
-- Arguments:
-    pkg_path: "%pkg_path%"
-    software_title: "%NAME%"
-    version: "%version%"
-    gitops_mode: true
-    aws_s3_bucket: "%AWS_S3_BUCKET%"
-    aws_cloudfront_domain: "%AWS_CLOUDFRONT_DOMAIN%"
-    aws_access_key_id: "%AWS_ACCESS_KEY_ID%"
-    aws_secret_access_key: "%AWS_SECRET_ACCESS_KEY%"
-    aws_default_region: "%AWS_DEFAULT_REGION%"
-    gitops_repo_url: "%FLEET_GITOPS_REPO_URL%"
-    gitops_software_dir: "%FLEET_GITOPS_SOFTWARE_DIR%"
-    gitops_team_yaml_path: "%FLEET_GITOPS_TEAM_YAML_PATH%"
-    github_token: "%FLEET_GITOPS_GITHUB_TOKEN%"
-    s3_retention_versions: 0
-    self_service: true
-    categories:
-    - Developer tools
-    icon: Claude.png
-  Processor: com.github.FleetImporter/FleetImporter
-```
+| `gitops_team_yaml_path` | string | `teams/workstations.yml` | Path to team YAML file |
 
 ### GitOps workflow
 
@@ -275,31 +195,7 @@ autopkg run -vvv YourRecipe.recipe.yaml
 python3 tests/test_style_guide_compliance.py
 ```
 
-## Testing
-
-### Style Guide Compliance
-
-All recipes are validated against style guide requirements defined in [CONTRIBUTING.md](CONTRIBUTING.md). To run the validation tests locally:
-
-```bash
-# Install PyYAML if needed
-python3 -m pip install PyYAML
-
-# Run style guide compliance tests
-python3 tests/test_style_guide_compliance.py
-```
-
-The test validates:
-- ✅ YAML syntax is valid
-- ✅ Required AutoPkg fields present (Description, Identifier, Input, Process)
-- ✅ `SELF_SERVICE` set to `true` in all recipes
-- ✅ `AUTOMATIC_INSTALL` set to `false` in all recipes
-- ✅ `FLEET_GITOPS_SOFTWARE_DIR` set to `lib/macos/software` in GitOps recipes
-- ✅ `FLEET_GITOPS_TEAM_YAML_PATH` set to `teams/workstations.yml` in GitOps recipes
-- ✅ All Process arguments reference Input variables correctly
-- ✅ Filename conventions, vendor folder structure, identifiers, categories, and more
-
-See [tests/README.md](tests/README.md) for more information.
+---
 
 ## Getting help
 
