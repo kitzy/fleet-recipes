@@ -17,7 +17,7 @@ FleetImporter extends AutoPkg to integrate with Fleet's software management. It 
 
 - **Python 3.9+**: Required by FleetImporter processor
 - **AutoPkg 2.3+**: Required for recipe execution
-- **boto3>=1.18.0**: Required for GitOps mode S3 operations
+- **boto3 1.18.0+**: Required for GitOps mode S3 operations
   - Automatically installed when needed if not present
   - Uses only native Python libraries for direct mode
 
