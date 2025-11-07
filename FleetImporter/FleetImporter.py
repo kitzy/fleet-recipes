@@ -247,24 +247,24 @@ class FleetImporter(Processor):
 
     def _build_version_query(self, bundle_id: str, version: str) -> str:
         """Build osquery query to detect outdated software versions.
-        
+
         Uses the 'apps' table which contains:
         - bundle_identifier (TEXT): App bundle ID
         - bundle_short_version (TEXT): App version
-        
+
         The query uses version_compare() function for semantic version comparison.
-        
+
         Args:
             bundle_id: App bundle identifier (e.g., com.github.GitHubClient)
             version: Current version to check against
-            
+
         Returns:
             osquery SQL query string
         """
         # Sanitize inputs for SQL query (escape single quotes)
         safe_bundle_id = bundle_id.replace("'", "''")
         safe_version = version.replace("'", "''")
-        
+
         # Build query using apps table and version_compare for semantic versioning
         # Returns 1 (policy fails) if any host has outdated version
         # version_compare returns: -1 if a < b, 0 if a == b, 1 if a > b
@@ -275,41 +275,43 @@ class FleetImporter(Processor):
             f"AND version_compare(bundle_short_version, '{safe_version}') < 0\n"
             f");"
         )
-        
+
         return query
-    
+
     def _format_policy_name(self, software_title: str, template: str = None) -> str:
         """Format policy name from template.
-        
+
         Args:
             software_title: Software title to use in policy name
             template: Optional template string with %NAME% placeholder
-            
+
         Returns:
             Formatted policy name
         """
         if template is None:
-            template = self.env.get("auto_update_policy_name", "autopkg-auto-update-%NAME%")
-        
+            template = self.env.get(
+                "auto_update_policy_name", "autopkg-auto-update-%NAME%"
+            )
+
         # Create slug from software title (lowercase, hyphens only)
         slug = self._slugify(software_title)
-        
+
         # Replace %NAME% placeholder with slug
         policy_name = template.replace("%NAME%", slug)
-        
+
         return policy_name
 
     def _find_existing_policy(
         self, fleet_api_base: str, fleet_token: str, team_id: int, policy_name: str
     ) -> dict | None:
         """Find existing policy by name.
-        
+
         Args:
             fleet_api_base: Fleet base URL
             fleet_token: Fleet API token
             team_id: Team ID (0 for global)
             policy_name: Policy name to search for
-            
+
         Returns:
             Policy dict if found, None otherwise
         """
@@ -319,29 +321,33 @@ class FleetImporter(Processor):
                 endpoint = f"{fleet_api_base}/api/v1/fleet/global/policies"
             else:
                 endpoint = f"{fleet_api_base}/api/v1/fleet/teams/{team_id}/policies"
-            
+
             headers = {
                 "Authorization": f"Bearer {fleet_token}",
                 "Accept": "application/json",
             }
             req = urllib.request.Request(endpoint, headers=headers)
-            
+
             with urllib.request.urlopen(
                 req, timeout=FLEET_VERSION_TIMEOUT, context=self._get_ssl_context()
             ) as resp:
                 if resp.getcode() == 200:
                     data = json.loads(resp.read().decode())
                     policies = data.get("policies", [])
-                    
+
                     # Search for policy by name
                     for policy in policies:
                         if policy.get("name") == policy_name:
                             return policy
-        except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError) as e:
+        except (
+            urllib.error.HTTPError,
+            urllib.error.URLError,
+            json.JSONDecodeError,
+        ) as e:
             self.output(f"Warning: Could not query policies: {e}")
-        
+
         return None
-    
+
     def _create_or_update_policy_direct(
         self,
         fleet_api_base: str,
@@ -349,18 +355,18 @@ class FleetImporter(Processor):
         team_id: int,
         software_title: str,
         version: str,
-        hash_sha256: str,
+        title_id: int,
         pkg_path: str,
     ):
         """Create or update auto-update policy via Fleet API.
-        
+
         Args:
             fleet_api_base: Fleet base URL
             fleet_token: Fleet API token
             team_id: Team ID (0 for global)
             software_title: Software title
             version: Software version
-            hash_sha256: SHA256 hash of package for linking
+            title_id: Software title ID for linking policy to package
             pkg_path: Path to package file for bundle ID extraction
         """
         # Extract bundle ID from package
@@ -370,20 +376,20 @@ class FleetImporter(Processor):
                 f"Warning: Could not extract bundle ID from package. Skipping auto-update policy creation."
             )
             return
-        
+
         # Build policy name
         policy_name = self._format_policy_name(software_title)
         self.output(f"Auto-update policy name: {policy_name}")
-        
+
         # Build version detection query using bundle ID
         query = self._build_version_query(bundle_id, version)
         self.output(f"Auto-update policy query: {query}")
-        
+
         # Check if policy already exists
         existing_policy = self._find_existing_policy(
             fleet_api_base, fleet_token, team_id, policy_name
         )
-        
+
         # Prepare policy payload
         payload = {
             "name": policy_name,
@@ -392,30 +398,28 @@ class FleetImporter(Processor):
             "resolution": f"This device will automatically install {software_title} {version}",
             "platform": "darwin",
             "critical": False,
-            "install_software": {
-                "hash_sha256": hash_sha256
-            }
+            "software_title_id": title_id,
         }
-        
+
         # Determine endpoint based on team_id
         if team_id == 0:
             base_endpoint = f"{fleet_api_base}/api/v1/fleet/global/policies"
         else:
             base_endpoint = f"{fleet_api_base}/api/v1/fleet/teams/{team_id}/policies"
-        
+
         headers = {
             "Authorization": f"Bearer {fleet_token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        
+
         try:
             if existing_policy:
                 # Update existing policy
                 policy_id = existing_policy["id"]
                 endpoint = f"{base_endpoint}/{policy_id}"
                 self.output(f"Updating existing auto-update policy (ID: {policy_id})")
-                
+
                 req = urllib.request.Request(
                     endpoint,
                     data=json.dumps(payload).encode(),
@@ -426,14 +430,14 @@ class FleetImporter(Processor):
                 # Create new policy
                 endpoint = base_endpoint
                 self.output("Creating new auto-update policy")
-                
+
                 req = urllib.request.Request(
                     endpoint,
                     data=json.dumps(payload).encode(),
                     headers=headers,
                     method="POST",
                 )
-            
+
             with urllib.request.urlopen(
                 req, timeout=FLEET_VERSION_TIMEOUT, context=self._get_ssl_context()
             ) as resp:
@@ -462,17 +466,20 @@ class FleetImporter(Processor):
         repo_dir: str,
         software_title: str,
         version: str,
-        hash_sha256: str,
         pkg_path: str,
     ):
         """Create or update auto-update policy in GitOps repository.
-        
+
         Args:
             repo_dir: Path to Git repository
-            software_title: Software title
+            software_title: Software title (used to reference the software package)
             version: Software version
-            hash_sha256: SHA256 hash of package for linking
             pkg_path: Path to package file for bundle ID extraction
+
+        Note:
+            In GitOps mode, the policy references software by name rather than ID.
+            Fleet will resolve the software_title to the appropriate software_title_id
+            when it processes the GitOps configuration.
         """
         # Extract bundle ID from package
         bundle_id = self._extract_bundle_id_from_pkg(Path(pkg_path))
@@ -481,16 +488,17 @@ class FleetImporter(Processor):
                 f"Warning: Could not extract bundle ID from package. Skipping auto-update policy creation."
             )
             return None
-        
+
         # Build policy name
         policy_name = self._format_policy_name(software_title)
         self.output(f"Auto-update policy name: {policy_name}")
-        
+
         # Build version detection query using bundle ID
         query = self._build_version_query(bundle_id, version)
         self.output(f"Auto-update policy query: {query}")
-        
+
         # Create policy YAML structure
+        # In GitOps mode, reference software by name - Fleet will resolve to software_title_id
         policy_yaml = {
             "name": policy_name,
             "query": query,
@@ -499,22 +507,22 @@ class FleetImporter(Processor):
             "platform": "darwin",
             "critical": False,
             "install_software": {
-                "hash_sha256": hash_sha256
-            }
+                "name": software_title,
+            },
         }
-        
+
         # Create lib/policies directory if it doesn't exist
         policies_dir = Path(repo_dir) / "lib" / "policies"
         policies_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Write policy file
         slug = self._slugify(software_title)
         policy_filename = f"{slug}.yml"
         policy_path = policies_dir / policy_filename
-        
+
         self.output(f"Writing auto-update policy to: lib/policies/{policy_filename}")
         self._write_yaml(policy_path, policy_yaml)
-        
+
         # Return relative path for Git operations
         return f"lib/policies/{policy_filename}"
 
@@ -721,7 +729,7 @@ class FleetImporter(Processor):
 
         # Create auto-update policy if enabled
         auto_update_enabled = bool(self.env.get("auto_update_enabled", False))
-        if auto_update_enabled and hash_sha256:
+        if auto_update_enabled and title_id:
             self.output("Auto-update policy enabled - creating/updating policy...")
             try:
                 self._create_or_update_policy_direct(
@@ -730,7 +738,7 @@ class FleetImporter(Processor):
                     team_id,
                     software_title,
                     version,
-                    hash_sha256,
+                    title_id,
                     pkg_path,
                 )
             except Exception as e:
@@ -739,9 +747,9 @@ class FleetImporter(Processor):
                     f"Warning: Failed to create auto-update policy: {e}. "
                     "Package upload succeeded, but policy creation failed."
                 )
-        elif auto_update_enabled and not hash_sha256:
+        elif auto_update_enabled and not title_id:
             self.output(
-                "Warning: Auto-update policy enabled but no hash available. "
+                "Warning: Auto-update policy enabled but no software title ID available. "
                 "Skipping policy creation."
             )
 
@@ -911,14 +919,13 @@ class FleetImporter(Processor):
             # Create auto-update policy if enabled
             policy_yaml_path = None
             auto_update_enabled = bool(self.env.get("auto_update_enabled", False))
-            if auto_update_enabled and hash_sha256:
+            if auto_update_enabled:
                 self.output("Auto-update policy enabled - creating policy YAML...")
                 try:
                     policy_yaml_path = self._create_or_update_policy_gitops(
                         temp_dir,
                         software_title,
                         version,
-                        hash_sha256,
                         pkg_path,
                     )
                 except Exception as e:
@@ -927,11 +934,6 @@ class FleetImporter(Processor):
                         f"Warning: Failed to create auto-update policy YAML: {e}. "
                         "Package upload succeeded, but policy creation failed."
                     )
-            elif auto_update_enabled and not hash_sha256:
-                self.output(
-                    "Warning: Auto-update policy enabled but no hash available. "
-                    "Skipping policy creation."
-                )
 
             # Create Git branch, commit, and push
             branch_name = f"autopkg/{self._slugify(software_title)}-{version}"
@@ -1259,9 +1261,7 @@ class FleetImporter(Processor):
             info_plist = app_bundle / "Contents" / "Info.plist"
 
             if not info_plist.exists():
-                self.output(
-                    f"Warning: Info.plist not found in {app_bundle.name}"
-                )
+                self.output(f"Warning: Info.plist not found in {app_bundle.name}")
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 return None
 
@@ -1295,9 +1295,7 @@ class FleetImporter(Processor):
             return bundle_id
 
         except Exception as e:
-            self.output(
-                f"Warning: Bundle ID extraction failed with error: {e}"
-            )
+            self.output(f"Warning: Bundle ID extraction failed with error: {e}")
             if temp_dir and temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
             return None
@@ -1889,7 +1887,7 @@ class FleetImporter(Processor):
                 # icon_path is like ../../icons/claude.png, need to convert to lib/icons/claude.png
                 icon_file = icon_path.replace("../../", "lib/")
                 files_to_add.append(icon_file)
-            
+
             # Add policy file if provided
             if policy_yaml_path:
                 # policy_yaml_path is already relative to repo root (e.g., lib/policies/chrome.yml)
