@@ -360,7 +360,10 @@ class StyleGuideValidator:
     def validate_self_service(self, recipe_path, input_section):
         """Validate self_service (lowercase, preferred) or SELF_SERVICE (legacy) is set to true."""
         # Check for lowercase (preferred) or UPPERCASE (legacy)
-        self_service = input_section.get("self_service") or input_section.get("SELF_SERVICE")
+        # Can't use 'or' because False is falsy
+        self_service = input_section.get("self_service")
+        if self_service is None:
+            self_service = input_section.get("SELF_SERVICE")
 
         if self_service is None:
             self.errors.append(f"{recipe_path}: Missing self_service in Input section")
@@ -376,7 +379,10 @@ class StyleGuideValidator:
     def validate_automatic_install(self, recipe_path, input_section):
         """Validate automatic_install (lowercase, preferred) or AUTOMATIC_INSTALL (legacy) is set to false."""
         # Check for lowercase (preferred) or UPPERCASE (legacy)
-        automatic_install = input_section.get("automatic_install") or input_section.get("AUTOMATIC_INSTALL")
+        # Can't use 'or' because False is falsy
+        automatic_install = input_section.get("automatic_install")
+        if automatic_install is None:
+            automatic_install = input_section.get("AUTOMATIC_INSTALL")
 
         if automatic_install is None:
             self.errors.append(
@@ -414,7 +420,11 @@ class StyleGuideValidator:
     def validate_categories_requirement(self, recipe_path, input_section):
         """Validate categories (lowercase, preferred) or CATEGORIES (legacy) is present when self_service is true."""
         # Check for lowercase (preferred) or UPPERCASE (legacy)
-        self_service = input_section.get("self_service") or input_section.get("SELF_SERVICE")
+        # Can't use 'or' because False is falsy
+        self_service = input_section.get("self_service")
+        if self_service is None:
+            self_service = input_section.get("SELF_SERVICE")
+        
         categories = input_section.get("categories")
         if categories is None:
             categories = input_section.get("CATEGORIES")
