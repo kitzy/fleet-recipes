@@ -64,6 +64,9 @@ FleetImporter recipes support the following variables. Configuration can be set 
 | `uninstall_script` | Optional | Optional | - | Custom uninstall script |
 | `pre_install_query` | Optional | Optional | - | osquery to run before install |
 | `post_install_script` | Optional | Optional | - | Script to run after install |
+| **Auto-Update Policies** | | | | |
+| `AUTO_UPDATE_ENABLED` | Optional | Optional | `false` | Create/update policies for automatic version detection and installation |
+| `AUTO_UPDATE_POLICY_NAME` | Optional | Optional | `autopkg-auto-update-%NAME%` | Policy name template (%NAME% replaced with slugified software title) |
 | **GitOps-Specific Options** | | | | |
 | `s3_retention_versions` | Not used | Optional | `0` | Number of old package versions to retain in S3 (0 = no pruning) |
 
@@ -146,6 +149,127 @@ FleetImporter automatically extracts and uploads application icons from `.pkg` f
 - **Format conversion**: Converts macOS `.icns` files to PNG format using the built-in `sips` tool
 - **Fallback**: If extraction fails, continues without an icon (or uses manual `icon` path if provided)
 - **Override**: Specify `icon: path/to/icon.png` in your recipe to use a custom icon instead of auto-extraction
+
+---
+
+## Auto-update policy automation
+
+FleetImporter can automatically create Fleet policies that detect outdated software versions and trigger automatic updates via self-service installation. When enabled, a policy is created for each software package that:
+
+1. **Detects outdated versions**: Uses osquery to find hosts running any version except the latest
+2. **Triggers installation**: Automatically installs the updated package when policy fails
+3. **Works in both modes**: Supports direct API mode and GitOps mode
+
+### Enabling auto-update policies
+
+Auto-update policies are **disabled by default** for backward compatibility. Enable them via recipe overrides or AutoPkg preferences:
+
+```bash
+# Option 1: Enable via AutoPkg preferences (applies to all recipes)
+defaults write com.github.autopkg AUTO_UPDATE_ENABLED true
+defaults write com.github.autopkg AUTO_UPDATE_POLICY_NAME "autopkg-auto-update-%NAME%"
+
+# Option 2: Enable in a recipe override (per-recipe control)
+autopkg make-override VendorName/SoftwareName.fleet.recipe.yaml
+# Edit the override to set AUTO_UPDATE_ENABLED: true
+autopkg run SoftwareName.fleet.recipe.yaml
+```
+
+### How it works
+
+When `AUTO_UPDATE_ENABLED` is set to `true`, FleetImporter:
+
+1. **Builds version query**: Creates an osquery SQL query that detects hosts running outdated versions:
+   ```sql
+   SELECT * FROM programs WHERE name = 'GitHub Desktop' AND version != '3.3.12'
+   ```
+
+2. **Creates policy** (Direct mode): Uses Fleet API to create or update a policy with:
+   - Descriptive name (e.g., `autopkg-auto-update-github-desktop`)
+   - Version detection query
+   - Link to install package automatically on policy failure
+   - Platform targeting (macOS only)
+
+3. **Creates policy YAML** (GitOps mode): Writes policy definition to `lib/policies/` directory:
+   ```yaml
+   apiVersion: v1
+   kind: policy
+   spec:
+     name: autopkg-auto-update-github-desktop
+     query: SELECT * FROM programs WHERE name = 'GitHub Desktop' AND version != '3.3.12'
+     description: Auto-update policy for GitHub Desktop (version 3.3.12)...
+     resolution: Install GitHub Desktop 3.3.12 via Fleet self-service
+     platform: darwin
+     critical: false
+   ```
+
+### Policy naming
+
+Policy names are generated from the `AUTO_UPDATE_POLICY_NAME` template:
+
+- **Default template**: `autopkg-auto-update-%NAME%`
+- **%NAME% placeholder**: Replaced with slugified software title
+- **Slugification**: Converts to lowercase, removes special characters, replaces spaces with hyphens
+
+Examples:
+- `GitHub Desktop` → `autopkg-auto-update-github-desktop`
+- `Visual Studio Code` → `autopkg-auto-update-visual-studio-code`
+- `1Password 8` → `autopkg-auto-update-1password-8`
+
+### SQL injection prevention
+
+All software titles and versions are automatically escaped to prevent SQL injection:
+
+- Single quotes are doubled: `O'Reilly App` → `O''Reilly App`
+- Query remains safe even with malicious input
+- Tested against common injection patterns (OR clauses, UNION, DROP TABLE, etc.)
+
+### Important considerations
+
+1. **Policy cleanup**: Policies are NOT automatically deleted when software is removed. You should manually delete outdated policies or implement cleanup automation.
+
+2. **Version detection**: Uses exact version matching (`version != 'X.Y.Z'`). Semantic version comparison (e.g., `< 3.0.0`) is not currently supported.
+
+3. **Error handling**: Policy creation failures are logged as warnings and don't block package uploads. Check AutoPkg output for any policy-related errors.
+
+4. **Team vs global policies**:
+   - Direct mode: Creates team-specific policies when `FLEET_TEAM_ID` > 0, global policies when `FLEET_TEAM_ID` = 0
+   - GitOps mode: Policy scope determined by GitOps repository structure
+
+5. **Idempotency**: Existing policies with the same name are updated (not duplicated) when recipes run again
+
+### Example: Enabling auto-update for a specific recipe
+
+```yaml
+# Create override: autopkg make-override GitHub/GithubDesktop.fleet.recipe.yaml
+
+Description: "Builds GitHub Desktop.pkg and uploads to Fleet with auto-update policy"
+Identifier: com.github.fleet.GithubDesktop
+MinimumVersion: "2.3"
+ParentRecipe: com.github.homebysix.pkg.GitHubDesktop
+
+Input:
+  NAME: GitHub Desktop
+  self_service: true
+  automatic_install: false
+  categories:
+  - Developer tools
+  
+  # Enable auto-update policy automation
+  AUTO_UPDATE_ENABLED: true
+  AUTO_UPDATE_POLICY_NAME: "autopkg-auto-update-%NAME%"
+  
+  gitops_mode: false
+
+Process:
+- Processor: com.github.fleet.FleetImporter/FleetImporter
+  # Arguments inherited from recipe
+```
+
+After running this recipe, Fleet will create a policy that:
+- Fails on hosts running any version except the latest
+- Automatically installs the latest version via self-service
+- Updates the version check each time the recipe runs with a new version
 
 ---
 
