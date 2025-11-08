@@ -222,6 +222,11 @@ class FleetImporter(Processor):
             "default": "autopkg-auto-update-%NAME%",
             "description": "Template for auto-update policy name. Use %NAME% as placeholder for software title (default: autopkg-auto-update-%NAME%).",
         },
+        "auto_update_policy_query": {
+            "required": False,
+            "default": "",
+            "description": "Query template for auto-update policy. Use %VERSION% as placeholder for version number. If not specified, a default query using bundle_identifier will be generated (macOS apps only).",
+        },
     }
 
     output_variables = {
@@ -245,38 +250,54 @@ class FleetImporter(Processor):
         """Create an SSL context using certifi's CA bundle."""
         return ssl.create_default_context(cafile=certifi.where())
 
-    def _build_version_query(self, bundle_id: str, version: str) -> str:
+    def _build_version_query(
+        self, version: str, query_template: str = None, bundle_id: str = None
+    ) -> str:
         """Build osquery query to detect outdated software versions.
 
-        Uses the 'apps' table which contains:
-        - bundle_identifier (TEXT): App bundle ID
-        - bundle_short_version (TEXT): App version
-
-        The query uses version_compare() function for semantic version comparison.
+        Supports two modes:
+        1. Template mode: Use provided query_template with %VERSION% placeholder
+        2. Default mode: Generate query using bundle_identifier and version_compare()
 
         Args:
-            bundle_id: App bundle identifier (e.g., com.github.GitHubClient)
             version: Current version to check against
+            query_template: Optional query template with %VERSION% placeholder
+            bundle_id: App bundle identifier (required for default mode)
 
         Returns:
-            osquery SQL query string
+            osquery SQL query string with version substituted
+
+        Raises:
+            ProcessorError: If template mode is used without query_template,
+                          or default mode is used without bundle_id
         """
-        # Sanitize inputs for SQL query (escape single quotes)
-        safe_bundle_id = bundle_id.replace("'", "''")
+        # Sanitize version for SQL (escape single quotes)
         safe_version = version.replace("'", "''")
 
-        # Build query using apps table and version_compare for semantic versioning
-        # Returns 1 (policy fails) if any host has outdated version
-        # version_compare returns: -1 if a < b, 0 if a == b, 1 if a > b
-        # We want to fail if version < required (version_compare(...) < 0)
-        query = (
-            f"SELECT 1 WHERE EXISTS (\n"
-            f"  SELECT 1 FROM apps WHERE bundle_identifier = '{safe_bundle_id}' "
-            f"AND version_compare(bundle_short_version, '{safe_version}') < 0\n"
-            f");"
-        )
+        if query_template:
+            # Template mode: Replace %VERSION% placeholder with actual version
+            query = query_template.replace("%VERSION%", safe_version)
+            return query
+        elif bundle_id:
+            # Default mode: Generate query using apps table and version_compare
+            # This is the legacy behavior for macOS apps
+            safe_bundle_id = bundle_id.replace("'", "''")
 
-        return query
+            # Build query using apps table and version_compare for semantic versioning
+            # Returns 1 (policy fails) if any host has outdated version
+            # version_compare returns: -1 if a < b, 0 if a == b, 1 if a > b
+            # We want to fail if version < required (version_compare(...) < 0)
+            query = (
+                f"SELECT 1 WHERE EXISTS (\n"
+                f"  SELECT 1 FROM apps WHERE bundle_identifier = '{safe_bundle_id}' "
+                f"AND version_compare(bundle_short_version, '{safe_version}') < 0\n"
+                f");"
+            )
+            return query
+        else:
+            raise ProcessorError(
+                "Either query_template or bundle_id must be provided to build version query"
+            )
 
     def _format_policy_name(self, software_title: str, template: str = None) -> str:
         """Format policy name from template.
@@ -369,20 +390,31 @@ class FleetImporter(Processor):
             title_id: Software title ID for linking policy to package
             pkg_path: Path to package file for bundle ID extraction
         """
-        # Extract bundle ID from package
-        bundle_id = self._extract_bundle_id_from_pkg(Path(pkg_path))
-        if not bundle_id:
-            self.output(
-                f"Warning: Could not extract bundle ID from package. Skipping auto-update policy creation."
-            )
-            return
-
         # Build policy name
         policy_name = self._format_policy_name(software_title)
         self.output(f"Auto-update policy name: {policy_name}")
 
-        # Build version detection query using bundle ID
-        query = self._build_version_query(bundle_id, version)
+        # Build version detection query
+        query_template = self.env.get("auto_update_policy_query", "").strip()
+
+        if query_template:
+            # Use custom query template from recipe
+            self.output("Using custom query template from recipe")
+            query = self._build_version_query(version, query_template=query_template)
+        else:
+            # Fall back to default bundle_identifier-based query
+            self.output(
+                "No query template specified, using default bundle_identifier detection"
+            )
+            bundle_id = self._extract_bundle_id_from_pkg(Path(pkg_path))
+            if not bundle_id:
+                self.output(
+                    f"Warning: Could not extract bundle ID from package and no query template provided. "
+                    "Skipping auto-update policy creation."
+                )
+                return
+            query = self._build_version_query(version, bundle_id=bundle_id)
+
         self.output(f"Auto-update policy query: {query}")
 
         # Check if policy already exists
@@ -481,20 +513,31 @@ class FleetImporter(Processor):
             Fleet will resolve the software_title to the appropriate software_title_id
             when it processes the GitOps configuration.
         """
-        # Extract bundle ID from package
-        bundle_id = self._extract_bundle_id_from_pkg(Path(pkg_path))
-        if not bundle_id:
-            self.output(
-                f"Warning: Could not extract bundle ID from package. Skipping auto-update policy creation."
-            )
-            return None
-
         # Build policy name
         policy_name = self._format_policy_name(software_title)
         self.output(f"Auto-update policy name: {policy_name}")
 
-        # Build version detection query using bundle ID
-        query = self._build_version_query(bundle_id, version)
+        # Build version detection query
+        query_template = self.env.get("auto_update_policy_query", "").strip()
+
+        if query_template:
+            # Use custom query template from recipe
+            self.output("Using custom query template from recipe")
+            query = self._build_version_query(version, query_template=query_template)
+        else:
+            # Fall back to default bundle_identifier-based query
+            self.output(
+                "No query template specified, using default bundle_identifier detection"
+            )
+            bundle_id = self._extract_bundle_id_from_pkg(Path(pkg_path))
+            if not bundle_id:
+                self.output(
+                    f"Warning: Could not extract bundle ID from package and no query template provided. "
+                    "Skipping auto-update policy creation."
+                )
+                return None
+            query = self._build_version_query(version, bundle_id=bundle_id)
+
         self.output(f"Auto-update policy query: {query}")
 
         # Create policy YAML structure
